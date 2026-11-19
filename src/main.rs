@@ -1,9 +1,10 @@
 #![windows_subsystem = "windows"]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui::{self, Button, Color32, TextEdit};
-use std::thread::sleep;
+use tokio::sync::Mutex;
 
 mod privileges;
 mod process;
@@ -14,8 +15,7 @@ enum Status {
     Protected,
 }
 
-struct NvSsdGuard {
-    proc_name: &'static str,
+struct AppState {
     proc_pid: u32,
     status: Status,
     status_color: Color32,
@@ -23,20 +23,7 @@ struct NvSsdGuard {
     log: String,
 }
 
-impl Default for NvSsdGuard {
-    fn default() -> Self {
-        Self {
-            proc_name: "NVDisplay.Container.exe",
-            proc_pid: 0,
-            status: Status::Unknown,
-            status_color: Color32::WHITE,
-            lock: false,
-            log: "log initialized\n".to_string(),
-        }
-    }
-}
-
-impl NvSsdGuard {
+impl AppState {
     fn set_status_unknown(&mut self) {
         self.status = Status::Unknown;
         self.status_color = Color32::WHITE;
@@ -54,6 +41,102 @@ impl NvSsdGuard {
     }
 }
 
+struct NvSsdGuard {
+    proc_name: &'static str,
+    state: Arc<Mutex<AppState>>,
+    rt: tokio::runtime::Runtime,
+}
+
+impl Default for NvSsdGuard {
+    fn default() -> Self {
+        Self {
+            proc_name: "NVDisplay.Container.exe",
+            state: Arc::new(Mutex::new(AppState {
+                proc_pid: 0,
+                status: Status::Unknown,
+                status_color: Color32::WHITE,
+                lock: false,
+                log: "log initialized\n".to_string(),
+            })),
+            rt: tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        }
+    }
+}
+
+async fn start_guard(name: &'static str, state: Arc<Mutex<AppState>>) {
+    // kill existing processes (blocking Win32 call off the UI thread)
+    let _killed = tokio::task::spawn_blocking(|| process::kill_processes_by_name(name))
+        .await
+        .unwrap();
+
+    let mut s = state.lock().await;
+    s.append_log("waiting 30s for process to relaunch\n");
+    drop(s);
+
+    tokio::time::sleep(Duration::from_secs(30)).await;
+
+    // Find PID
+    let pid = process::find_process_id_by_name(name);
+    let mut s = state.lock().await;
+    s.append_log("finding PID\n");
+    if pid == 0 {
+        s.append_log(&format!("no {} PID found\n", name));
+        s.set_status_unknown();
+        s.lock = false;
+        return;
+    }
+    s.proc_pid = pid;
+    s.append_log(&format!("found {} PID {}\n", name, pid));
+    drop(s);
+
+    // Suspend PID
+    let (count, failed) = process::suspend_process(pid);
+    let mut s = state.lock().await;
+    if failed {
+        s.append_log("failed to suspend process\n");
+        s.set_status_unknown();
+        s.lock = false;
+    } else {
+        s.append_log(&format!("suspended {} threads\n", count));
+        s.set_status_protected();
+        s.append_log("finished starting guard\n");
+        s.lock = false;
+    }
+}
+
+async fn stop_guard(name: &'static str, state: Arc<Mutex<AppState>>) {
+    // Find PID
+    let pid = process::find_process_id_by_name(name);
+    let mut s = state.lock().await;
+    s.append_log("finding PID\n");
+    if pid == 0 {
+        s.append_log(&format!("no {} PID found\n", name));
+        s.set_status_unknown();
+        s.lock = false;
+        return;
+    }
+    s.proc_pid = pid;
+    s.append_log(&format!("found {} PID {}\n", name, pid));
+    drop(s);
+
+    // Resume PID
+    let (count, failed) = process::resume_process(pid);
+    let mut s = state.lock().await;
+    if failed {
+        s.append_log("failed to resume process\n");
+        s.set_status_unknown();
+        s.lock = false;
+    } else {
+        s.append_log(&format!("resumed {} threads\n", count));
+        s.set_status_unprotected();
+        s.append_log("finished stopping guard\n");
+    }
+    s.lock = false;
+}
+
 impl eframe::App for NvSsdGuard {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -67,98 +150,35 @@ impl eframe::App for NvSsdGuard {
                         ui.add_space(12.0);
 
                         // START
+                        let start_enabled = !self.state.blocking_lock().lock;
                         if ui
-                            .add_enabled(!self.lock, Button::new("Start Guard"))
+                            .add_enabled(start_enabled, Button::new("Start Guard"))
                             .clicked()
                         {
-                            self.lock = true;
-                            self.append_log("starting guard\n");
+                            let mut s = self.state.blocking_lock();
+                            s.lock = true;
+                            s.append_log("starting guard\n");
+                            drop(s);
 
-                            // killing existing processses
-                            let _killed = process::kill_processes_by_name(self.proc_name);
-                            let duration = 30;
-                            self.append_log(
-                                format!("waiting {}s for process to relaunch\n", duration).as_str(),
-                            );
-                            sleep(Duration::from_secs(20));
-
-                            // Find PID
-                            self.append_log("finding PID\n");
-                            let pid = process::find_process_id_by_name(self.proc_name);
-                            match pid {
-                                0 => {
-                                    self.append_log(
-                                        format!("no {} PID found\n", self.proc_name).as_str(),
-                                    );
-                                    self.set_status_unknown();
-                                    self.lock = false;
-                                    return;
-                                }
-                                _ => {
-                                    self.proc_pid = pid;
-                                    self.append_log(
-                                        format!("found {} PID {}\n", self.proc_name, self.proc_pid)
-                                            .as_str(),
-                                    );
-                                }
-                            }
-
-                            // Suspend PID
-                            let (count, failed) = process::suspend_process(self.proc_pid);
-                            if failed {
-                                self.append_log("failed to suspend process\n");
-                                self.set_status_unknown();
-                                self.lock = false;
-                                return;
-                            }
-                            self.append_log(format!("suspended {} threads\n", count).as_str());
-                            self.set_status_protected();
-                            self.append_log("finished starting guard\n");
-                            self.lock = false;
+                            let state = Arc::clone(&self.state);
+                            self.rt.spawn(start_guard(self.proc_name, state));
                         }
 
                         ui.add_space(4.0);
 
                         // STOP
+                        let stop_enabled = !self.state.blocking_lock().lock;
                         if ui
-                            .add_enabled(!self.lock, Button::new("Stop Guard"))
+                            .add_enabled(stop_enabled, Button::new("Stop Guard"))
                             .clicked()
                         {
-                            self.lock = true;
+                            let mut s = self.state.blocking_lock();
+                            s.lock = true;
+                            s.append_log("stopping guard\n");
+                            drop(s);
 
-                            // Find PID
-                            self.append_log("stopping guard\n");
-                            self.append_log("finding PID\n");
-                            let pid = process::find_process_id_by_name(self.proc_name);
-                            match pid {
-                                0 => {
-                                    self.append_log(
-                                        format!("no {} PID found\n", self.proc_name).as_str(),
-                                    );
-                                    self.set_status_unknown();
-                                    self.lock = false;
-                                    return;
-                                }
-                                _ => {
-                                    self.proc_pid = pid;
-                                    self.append_log(
-                                        format!("found {} PID {}\n", self.proc_name, self.proc_pid)
-                                            .as_str(),
-                                    );
-                                }
-                            }
-
-                            let (count, failed) = process::resume_process(self.proc_pid);
-                            if failed {
-                                self.append_log("failed to resume process\n");
-                                self.set_status_unknown();
-                                self.lock = false;
-                                return;
-                            }
-                            self.append_log(format!("resumed {} threads\n", count).as_str());
-                            self.set_status_unprotected();
-                            self.append_log("finished stopping guard\n");
-                            self.lock = false;
+                            let state = Arc::clone(&self.state);
+                            self.rt.spawn(stop_guard(self.proc_name, state));
                         }
 
                         ui.add_space(300.0);
@@ -170,25 +190,27 @@ impl eframe::App for NvSsdGuard {
 
                 // center panel
                 egui::CentralPanel::default_margins().show(ui, |ui| {
-                    match &self.status {
+                    let mut s = self.state.blocking_lock();
+
+                    match &s.status {
                         Status::Unknown => {
                             ui.label(
                                 egui::RichText::new("Status: Unknown")
-                                    .color(self.status_color)
+                                    .color(s.status_color)
                                     .size(18.0),
                             );
                         }
                         Status::Protected => {
                             ui.label(
                                 egui::RichText::new("Status: Protected")
-                                    .color(self.status_color)
+                                    .color(s.status_color)
                                     .size(18.0),
                             );
                         }
                         Status::Unproteced => {
                             ui.label(
                                 egui::RichText::new("Status: Unprotected")
-                                    .color(self.status_color)
+                                    .color(s.status_color)
                                     .size(16.0),
                             );
                         }
@@ -196,14 +218,12 @@ impl eframe::App for NvSsdGuard {
 
                     ui.add_space(4.0);
 
-                    ui.label(
-                        egui::RichText::new(format!("Process ID: {}", self.proc_pid)).size(16.0),
-                    );
+                    ui.label(egui::RichText::new(format!("Process ID: {}", s.proc_pid)).size(16.0));
 
                     // Log
                     ui.label(egui::RichText::new("Log:").size(16.0));
                     ui.add_space(4.0);
-                    ui.add(TextEdit::multiline(&mut self.log));
+                    ui.add(TextEdit::multiline(&mut s.log));
                 });
             });
         });
