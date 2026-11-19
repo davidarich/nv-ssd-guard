@@ -5,6 +5,7 @@ use std::time::Duration;
 use eframe::egui::{self, Button, Color32, TextEdit};
 use std::thread::sleep;
 
+mod privileges;
 mod process;
 
 enum Status {
@@ -75,9 +76,11 @@ impl eframe::App for NvSsdGuard {
 
                             // killing existing processses
                             let _killed = process::kill_processes_by_name(self.proc_name);
-
-                            self.append_log("waiting for process to relaunch\n");
-                            sleep(Duration::from_secs(12));
+                            let duration = 30;
+                            self.append_log(
+                                format!("waiting {}s for process to relaunch\n", duration).as_str(),
+                            );
+                            sleep(Duration::from_secs(20));
 
                             // Find PID
                             self.append_log("finding PID\n");
@@ -93,7 +96,6 @@ impl eframe::App for NvSsdGuard {
                                 }
                                 _ => {
                                     self.proc_pid = pid;
-                                    self.set_status_protected();
                                     self.append_log(
                                         format!("found {} PID {}\n", self.proc_name, self.proc_pid)
                                             .as_str(),
@@ -110,6 +112,7 @@ impl eframe::App for NvSsdGuard {
                                 return;
                             }
                             self.append_log(format!("suspended {} threads\n", count).as_str());
+                            self.set_status_protected();
                             self.append_log("finished starting guard\n");
                             self.lock = false;
                         }
@@ -208,6 +211,9 @@ impl eframe::App for NvSsdGuard {
 }
 
 fn main() -> eframe::Result {
+    // acquire SeDebugPrivilege to allow suspension of NVDisplay.Container
+    privileges::acquire_debug_privilege();
+
     let options = eframe::NativeOptions {
         viewport: {
             let mut vb = egui::ViewportBuilder::default();
