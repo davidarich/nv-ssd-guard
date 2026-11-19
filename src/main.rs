@@ -73,6 +73,7 @@ async fn start_guard(name: &'static str, state: Arc<Mutex<AppState>>) {
         .unwrap();
 
     let mut s = state.lock().await;
+    s.append_log(format!("killed {} process\n", name).as_str());
     s.append_log("waiting 30s for process to relaunch\n");
     drop(s);
 
@@ -223,7 +224,29 @@ impl eframe::App for NvSsdGuard {
                     // Log
                     ui.label(egui::RichText::new("Log:").size(16.0));
                     ui.add_space(4.0);
-                    ui.add(TextEdit::multiline(&mut s.log));
+                    ui.with_layout(
+                        egui::Layout {
+                            cross_align: egui::Align::LEFT,
+                            cross_justify: true,
+                            main_dir: egui::Direction::TopDown,
+                            main_wrap: false,
+                            main_align: egui::Align::TOP,
+                            main_justify: true,
+                        },
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    let text_edit = TextEdit::multiline(&mut s.log)
+                                        .clip_text(true)
+                                        .desired_width(ui.available_width())
+                                        .desired_rows(10)
+                                        .interactive(false);
+                                    ui.add(text_edit);
+                                });
+                        },
+                    );
                 });
             });
         });
