@@ -1,0 +1,42 @@
+name: Build & Release
+
+# Builds the release binary on a Windows runner and publishes it to
+# GitHub Releases whenever a version tag (e.g. v0.1.0) is pushed.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package artifacts
+        shell: powershell
+        run: |
+          $exe = "target/release/nv-ssd-guard.exe"
+          New-Item -ItemType Directory -Path release | Out-Null
+          Copy-Item $exe release/
+          Compress-Archive -Path release -DestinationPath "nv-ssd-guard-windows-x64.zip"
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            nv-ssd-guard-windows-x64.zip
+            release/nv-ssd-guard.exe
