@@ -35,7 +35,7 @@ impl Default for NvSsdGuard {
 
 impl NvSsdGuard {
     fn set_status_unknown(&mut self) {
-        self.status = Status::Protected;
+        self.status = Status::Unknown;
         self.status_color = Color32::WHITE;
     }
     fn set_status_unprotected(&mut self) {
@@ -75,7 +75,7 @@ impl eframe::App for NvSsdGuard {
                             let _killed = process::kill_processes_by_name(self.proc_name);
 
                             self.append_log("waiting for process to relaunch\n");
-                            sleep(Duration::from_secs(10));
+                            sleep(Duration::from_secs(12));
 
                             // Find PID
                             self.append_log("finding PID\n");
@@ -100,9 +100,9 @@ impl eframe::App for NvSsdGuard {
                             }
 
                             // Suspend PID
-                            let (count, failed) = process::suspend_process(pid);
+                            let (count, failed) = process::suspend_process(self.proc_pid);
                             if failed {
-                                print!("failed to suspend process\n");
+                                self.append_log("failed to suspend process\n");
                                 self.set_status_unknown();
                                 self.lock = false;
                                 return;
@@ -136,7 +136,10 @@ impl eframe::App for NvSsdGuard {
                                 }
                                 _ => {
                                     self.proc_pid = pid;
-                                    println!("found {} PID {}\n", self.proc_name, self.proc_pid);
+                                    self.append_log(
+                                        format!("found {} PID {}\n", self.proc_name, self.proc_pid)
+                                            .as_str(),
+                                    );
                                 }
                             }
 
