@@ -1,0 +1,13 @@
+[package]
+name = "nv-ssd-guard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.37.0"
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "time"] }
+winapi = { version = "0.3.9", features = ["handleapi", "processthreadsapi","tlhelp32","winnt"] }
+
+[[bin]]
+name = "nv-ssd-guard"
+path = "src/main.rs"

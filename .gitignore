@@ -1,0 +1,6 @@
+/target
+/local
+/assets
+
+# bring your own AGENTS file
+AGENTS.md
