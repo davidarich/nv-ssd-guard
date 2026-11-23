@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 mod privileges;
 mod process;
+mod settings;
 mod task_scheduler;
 
 const TASK_NAME: &str = "NV_SSD_Guard_AutoRun";
@@ -48,11 +49,13 @@ struct NvSsdGuard {
     proc_name: &'static str,
     state: Arc<Mutex<AppState>>,
     rt: tokio::runtime::Runtime,
+    auto_start: bool,
 }
 
 impl Default for NvSsdGuard {
     fn default() -> Self {
-        Self {
+        let auto_start = settings::load_auto_start();
+        let app = Self {
             proc_name: "NVDisplay.Container.exe",
             state: Arc::new(Mutex::new(AppState {
                 proc_pid: 0,
@@ -65,7 +68,21 @@ impl Default for NvSsdGuard {
                 .enable_all()
                 .build()
                 .unwrap(),
+            auto_start,
+        };
+
+        // Auto run "Start Guard" when the application starts, if enabled.
+        if app.auto_start {
+            let mut s = app.state.blocking_lock();
+            s.lock = true;
+            s.append_log("auto starting guard\n");
+            drop(s);
+
+            let state = Arc::clone(&app.state);
+            app.rt.spawn(start_guard(app.proc_name, state));
         }
+
+        app
     }
 }
 
@@ -143,6 +160,12 @@ async fn stop_guard(name: &'static str, state: Arc<Mutex<AppState>>) {
 
 impl eframe::App for NvSsdGuard {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // While a guard action is running, keep repainting so log and status
+        // updates from the background task show up without user input.
+        if self.state.blocking_lock().lock {
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
+
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 ui.set_width(frame.winit_window().unwrap().inner_size().width as f32 - 24.0);
@@ -186,6 +209,25 @@ impl eframe::App for NvSsdGuard {
                         }
                         ui.add_space(4.0);
 
+                        // AUTO START
+                        if ui
+                            .checkbox(&mut self.auto_start, "Auto Start Guard")
+                            .changed()
+                        {
+                            let (saved, err) = settings::save_auto_start(self.auto_start);
+                            let mut s = self.state.blocking_lock();
+                            if saved {
+                                s.append_log(if self.auto_start {
+                                    "auto start guard enabled\n"
+                                } else {
+                                    "auto start guard disabled\n"
+                                });
+                            } else {
+                                s.append_log(&format!("{}\n", err));
+                            }
+                        }
+                        ui.add_space(4.0);
+
                         if ui.button("Run on Login").clicked() {
                             let (created, err) = task_scheduler::create_scheduled_task(TASK_NAME);
                             let mut s = self.state.blocking_lock();
@@ -206,7 +248,7 @@ impl eframe::App for NvSsdGuard {
                                 s.append_log(&format!("{}\n", err));
                             }
                         }
-                        ui.add_space(240.0);
+                        ui.add_space(216.0);
 
                         ui.label("Created by: Dave Rich");
                         ui.label("github.com/davidarich");
