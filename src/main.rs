@@ -319,7 +319,49 @@ impl eframe::App for NvSsdGuard {
     }
 }
 
+/// Shown instead of the main UI when the application is not running as administrator.
+struct AdminWarning;
+
+impl eframe::App for AdminWarning {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(24.0);
+                ui.label(
+                    egui::RichText::new("Administrator privileges required")
+                        .color(Color32::YELLOW)
+                        .size(18.0),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    "NV SSD Guard must be run as administrator.\n\
+                     Please restart the application using \"Run as administrator\".",
+                );
+                ui.add_space(16.0);
+                if ui.add(Button::new("Exit").min_size([80.0, 24.0].into())).clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        });
+    }
+}
+
 fn main() -> eframe::Result {
+    // ensure the application is running as administrator
+    if !privileges::is_elevated() {
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([400.0, 180.0])
+                .with_resizable(false),
+            ..Default::default()
+        };
+        return eframe::run_native(
+            "NV SSD Guard",
+            options,
+            Box::new(|_cc| Ok(Box::new(AdminWarning))),
+        );
+    }
+
     // acquire SeDebugPrivilege to allow suspension of NVDisplay.Container
     privileges::acquire_debug_privilege();
 

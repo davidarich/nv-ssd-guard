@@ -44,3 +44,32 @@ pub fn acquire_debug_privilege() {
         );
     }
 }
+
+/// Returns true if the current process is running with an elevated
+/// (administrator) token.
+pub fn is_elevated() -> bool {
+    use winapi::shared::minwindef::DWORD;
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::securitybaseapi::GetTokenInformation;
+    use winapi::um::winnt::{TOKEN_ELEVATION, TokenElevation};
+
+    unsafe {
+        let mut token_handle: HANDLE = null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) == 0 {
+            return false;
+        }
+
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut return_length: DWORD = 0;
+        let result = GetTokenInformation(
+            token_handle,
+            TokenElevation,
+            &mut elevation as *mut TOKEN_ELEVATION as *mut _,
+            size_of::<TOKEN_ELEVATION>() as DWORD,
+            &mut return_length,
+        );
+        CloseHandle(token_handle);
+
+        result != 0 && elevation.TokenIsElevated != 0
+    }
+}
