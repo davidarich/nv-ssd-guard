@@ -8,6 +8,9 @@ use tokio::sync::Mutex;
 
 mod privileges;
 mod process;
+mod task_scheduler;
+
+const TASK_NAME: &str = "NV_SSD_Guard_AutoRun";
 
 enum Status {
     Unknown,
@@ -181,8 +184,29 @@ impl eframe::App for NvSsdGuard {
                             let state = Arc::clone(&self.state);
                             self.rt.spawn(stop_guard(self.proc_name, state));
                         }
+                        ui.add_space(4.0);
 
-                        ui.add_space(300.0);
+                        if ui.button("Run on Login").clicked() {
+                            let (created, err) = task_scheduler::create_scheduled_task(TASK_NAME);
+                            let mut s = self.state.blocking_lock();
+                            if created {
+                                s.append_log("run on login task created\n");
+                            } else {
+                                s.append_log(&format!("{}\n", err));
+                            }
+                        }
+                        ui.add_space(4.0);
+
+                        if ui.button("Remove Run on Login").clicked() {
+                            let (deleted, err) = task_scheduler::delete_scheduled_task(TASK_NAME);
+                            let mut s = self.state.blocking_lock();
+                            if deleted {
+                                s.append_log("run on login task removed\n");
+                            } else {
+                                s.append_log(&format!("{}\n", err));
+                            }
+                        }
+                        ui.add_space(240.0);
 
                         ui.label("Created by: Dave Rich");
                         ui.label("github.com/davidarich");
