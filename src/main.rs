@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Local;
 use eframe::egui::{self, Button, Color32, TextEdit};
 use tokio::sync::Mutex;
 
@@ -41,7 +42,11 @@ impl AppState {
         self.status_color = Color32::DARK_GREEN;
     }
     fn append_log(&mut self, entry: &str) {
-        self.log.push_str(entry);
+        self.log.push_str(&format!(
+            "[{}] {}",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            entry
+        ));
     }
 }
 
@@ -62,7 +67,11 @@ impl Default for NvSsdGuard {
                 status: Status::Unknown,
                 status_color: Color32::WHITE,
                 lock: false,
-                log: "log initialized\n".to_string(),
+                log: format!(
+                    "[{}] {}",
+                    Local::now().format("%Y-%m-%d %H:%M:%S"),
+                    "log initialized\n".to_string(),
+                ),
             })),
             rt: tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -338,7 +347,10 @@ impl eframe::App for AdminWarning {
                      Please restart the application using \"Run as administrator\".",
                 );
                 ui.add_space(16.0);
-                if ui.add(Button::new("Exit").min_size([80.0, 24.0].into())).clicked() {
+                if ui
+                    .add(Button::new("Exit").min_size([80.0, 24.0].into()))
+                    .clicked()
+                {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
@@ -368,7 +380,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: {
             let mut vb = egui::ViewportBuilder::default();
-            vb = vb.with_inner_size([600.0, 440.0]);
+            vb = vb.with_inner_size([680.0, 440.0]);
             vb
         },
         ..Default::default()
